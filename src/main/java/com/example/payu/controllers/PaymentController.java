@@ -6,8 +6,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
-import java.util.Map;
-
 @RestController
 @RequestMapping("/payu")
 public class PaymentController {
@@ -18,34 +16,21 @@ public class PaymentController {
         this.paymentService = paymentService;
     }
 
-
-
     @PostMapping("/payment")
-    public Mono<ResponseEntity<Map<String, Object>>> payment(@RequestBody PaymentRequest paymentRequest) {
+    public Mono<ResponseEntity<PaymentResponse>> payment(@RequestBody PaymentRequest paymentRequest) {
         return paymentService.paymentPayU(paymentRequest)
-                .map(response -> ResponseEntity.ok().body(
-                        Map.of("status", "success", "response", response)       //url status
-                ))
+                .map(response -> ResponseEntity.ok(new PaymentResponse("success", response)))
                 .onErrorResume(e ->
-                        Mono.just(ResponseEntity.badRequest().body(
-                                Map.of("status", "error", "message", e.getMessage())
-                        ))
+                        Mono.just(ResponseEntity.badRequest().body(new PaymentResponse("error", e.getMessage())))
                 );
     }
 
     @PostMapping("/refund")
-    public Mono<ResponseEntity<Map<String, Object>>> refundOrder(@RequestBody RefundRequest refundRequest
-    ) {
+    public Mono<ResponseEntity<RefundResponseWrapper>> refundOrder(@RequestBody RefundRequest refundRequest) {
         return paymentService.refundOrder(refundRequest)
-                .map(response -> ResponseEntity.ok(
-                        Map.of("status", "success", "refundResponse", response)     //status
-                ))
-                .onErrorResume(e -> Mono.just(
-                        ResponseEntity.status(500).body(
-                                Map.of("status", "error", "message", e.getMessage())
-                        )
-                ));
+                .map(response -> ResponseEntity.ok(new RefundResponseWrapper("success", response)))
+                .onErrorResume(e ->
+                        Mono.just(ResponseEntity.status(500).body(new RefundResponseWrapper("error", e.getMessage())))
+                );
     }
-
-
 }

@@ -1,4 +1,5 @@
 package com.example.payu.services;
+import com.example.payu.configuration.PayuProperties;
 import com.example.payu.model.*;
 import com.example.payu.repository.OrderRepository;
 
@@ -7,10 +8,8 @@ import com.example.payu.components.ClientConfig;
 import com.example.payu.components.PaymentData;
 import com.example.payu.repository.RefundRepository;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import org.hibernate.engine.transaction.jta.platform.internal.SunOneJtaPlatform;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -20,7 +19,6 @@ import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
-import java.time.ZonedDateTime;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -35,15 +33,17 @@ public class PaymentService {
     private final AtomicReference<String> latestOrderId = new AtomicReference<>();
     private final AtomicReference<String> latestRefundId = new AtomicReference<>();
     private final RefundRepository refundRepository;
+    private final PayuProperties payuProperties;
 
     @Autowired
-    public PaymentService(ClientConfig clientConfig, WebClient.Builder webClientBuilder, AccessToken accessToken, PaymentData paymentData, OrderRepository orderRepository, RefundRepository refundRepository) {
+    public PaymentService(ClientConfig clientConfig, WebClient.Builder webClientBuilder, AccessToken accessToken, PaymentData paymentData, OrderRepository orderRepository, RefundRepository refundRepository, PayuProperties payuProperties) {
         this.clientConfig = clientConfig;
         this.webClientBuilder = webClientBuilder;
         this.accessToken = accessToken;
         this.paymentData =  paymentData;
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
+        this.payuProperties = payuProperties;
     }
 
 
@@ -56,6 +56,9 @@ public class PaymentService {
         orderRequest.setCurrencyCode(paymentRequest.getCurrencyCode());
         orderRequest.setTotalAmount(paymentRequest.getTotalAmount());
         orderRequest.setBuyer(paymentRequest.getBuyer());
+        orderRequest.setCustomerIp(payuProperties.getCustomerIp());
+        orderRequest.setMerchantPosId(payuProperties.getMerchantPosId());
+        orderRequest.setContinueUrl(payuProperties.getContinueUrl());
 
         return webClientBuilder.baseUrl(url)
                 .build()
@@ -72,7 +75,7 @@ public class PaymentService {
 
                     Order order = new Order();
                     order.setOrderId(orderId);
-                    order.setStatus(status);
+                    order.setStatus(Status.valueOf(status));
                     order.setDescription(paymentRequest.getDescription());
                     order.setCurrencyCode(paymentRequest.getCurrencyCode());
                     order.setTotalAmount(Integer.valueOf(paymentRequest.getTotalAmount()));
@@ -87,13 +90,13 @@ public class PaymentService {
     }
 
     public Flux<JsonNode> getOrderStatus() {
-        List<Order> pendingOrders = orderRepository.findAllByStatus("NEW");
+        List<Order> ordersToCheck = orderRepository.findAllByStatusIn(List.of(Status.NEW,Status.SUCCESS,Status.PENDING));
 
-        if (pendingOrders.isEmpty()) {
-            return Flux.error(new RuntimeException("Brak zamówień ze statusem 'NEW'."));
+        if (ordersToCheck.isEmpty()) {
+            return Flux.error(new RuntimeException("Brak zamówień ze statusem 'NEW' lub 'SUCCESS'."));
         }
 
-        return Flux.fromIterable(pendingOrders)
+        return Flux.fromIterable(ordersToCheck)
                 .flatMap(order -> {
                     String orderId = order.getOrderId();
                     String url = UriComponentsBuilder
@@ -108,22 +111,30 @@ public class PaymentService {
                             .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                             .retrieve()
                             .bodyToMono(JsonNode.class)
-                            .map(response -> {
+                            .flatMap(response -> {
                                 JsonNode ordersNode = response.path("orders");
                                 if (ordersNode.isArray() && ordersNode.size() > 0) {
                                     String newStatus = ordersNode.get(0).path("status").asText();
-                                    String currentStatus = order.getStatus();
-                                    if (!newStatus.equalsIgnoreCase(currentStatus)) {
-                                        order.setStatus(newStatus);
-                                        orderRepository.save(order);
-                                        System.out.println("Zamówienie " + orderId + " zaktualizowane na: " + newStatus);
-                                        System.out.println("Płatność udana!");
+                                    Status currentStatus = order.getStatus();
+                                    Status parsedStatus = Status.valueOf(newStatus.toUpperCase());
+
+                                    if (!parsedStatus.equals(currentStatus)) {
+                                        order.setStatus(parsedStatus);
+                                        return Mono.fromCallable(() -> {
+                                            orderRepository.save(order);
+                                            System.out.println("Zamówienie " + orderId + " zaktualizowane na: " + parsedStatus);
+                                            if (parsedStatus == Status.COMPLETED) {
+                                                System.out.println("Płatność zakończona pomyślnie!");
+                                            }
+                                            return response;
+                                        });
                                     }
                                 }
-                                return response;
+                                return Mono.just(response);
                             });
                 });
     }
+
 
 
 
@@ -171,7 +182,7 @@ public class PaymentService {
 
                     ObjectNode refundJson = JsonNodeFactory.instance.objectNode();
                     ObjectNode refundDetails = JsonNodeFactory.instance.objectNode();
-                    refundDetails.put("description", "Refund");
+                    refundDetails.put("description", payuProperties.getDescription());
                     refundDetails.put("amount", refundAmount);
                     refundJson.set("refund", refundDetails);
 
@@ -198,7 +209,7 @@ public class PaymentService {
                                 Refund refund = new Refund();
                                 refund.setOrderId(orderId);
                                 refund.setRefundId(refundId);
-                                refund.setStatus(refundStatus);
+                                refund.setStatus(Status.valueOf(refundStatus));
                                 refund.setAmount(amount);
                                 refund.setDescription(description);
                                 refund.setCurrencyCode(currencyCode);
@@ -219,7 +230,7 @@ public class PaymentService {
 
 
     public Flux<JsonNode> getRefundStatus() {
-        List<Refund> pendingRefunds = refundRepository.findAllByStatus("PENDING");
+        List<Refund> pendingRefunds = refundRepository.findAllByStatus(Status.PENDING);
 
         if (pendingRefunds.isEmpty()) {
             return Flux.error(new RuntimeException("Brak refundacji ze statusem 'PENDING'."));
@@ -242,9 +253,9 @@ public class PaymentService {
                             .doOnError(e -> System.out.println("Błąd przy pobieraniu statusu refundacji: " + refundId + " - " + e.getMessage()))
                             .map(response -> {
                                 String newStatus = response.path("status").asText();
-                                String currentStatus = refund.getStatus();
-                                if (!newStatus.equalsIgnoreCase(currentStatus)) {
-                                    refund.setStatus(newStatus);
+                                Status currentStatus = refund.getStatus();
+                                if (!newStatus.equalsIgnoreCase(String.valueOf(currentStatus))) {
+                                    refund.setStatus(Status.valueOf(newStatus));
                                     refundRepository.save(refund);
                                     System.out.println("Status refundacji " + refundId + " zaktualizowany na: " + newStatus);
                                     System.out.println("Zwrot wykonany!");
@@ -261,7 +272,4 @@ public class PaymentService {
         return latestOrderId.get();
     }
 
-    public String getLatestRefundId() {
-        return latestRefundId.get();
-    }
 }
