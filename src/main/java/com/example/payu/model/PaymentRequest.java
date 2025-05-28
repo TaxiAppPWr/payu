@@ -3,20 +3,12 @@ package com.example.payu.model;
 import java.util.List;
 
 public class PaymentRequest {
-    private String notifyUrl;
-    private String customerIp;
-    private String merchantPosId;
+    private String customerIp="127.0.0.1";
+    private String merchantPosId="490009";
     private String description;
     private String currencyCode;
     private String totalAmount;
     private Buyer buyer;
-    private List<Product> products;
-    private String continueUrl;
-
-
-    public void setNotifyUrl(String notifyUrl) {
-        this.notifyUrl = notifyUrl;
-    }
 
     public void setCustomerIp(String customerIp) {
         this.customerIp = customerIp;
@@ -42,17 +34,6 @@ public class PaymentRequest {
         this.buyer = buyer;
     }
 
-    public void setProducts(List<Product> products) {
-        this.products = products;
-    }
-
-    public void setContinueUrl(String continueUrl) {
-        this.continueUrl = continueUrl;
-    }
-
-    public String getNotifyUrl() {
-        return notifyUrl;
-    }
 
     public String getCustomerIp() {
         return customerIp;
@@ -78,11 +59,4 @@ public class PaymentRequest {
         return buyer;
     }
 
-    public List<Product> getProducts() {
-        return products;
-    }
-
-    public String getContinueUrl() {
-        return continueUrl;
-    }
 }

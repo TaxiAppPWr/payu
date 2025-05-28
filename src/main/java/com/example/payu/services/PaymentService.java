@@ -10,15 +10,18 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.hibernate.engine.transaction.jta.platform.internal.SunOneJtaPlatform;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.util.UriComponentsBuilder;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.time.ZonedDateTime;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Service
@@ -44,62 +47,15 @@ public class PaymentService {
     }
 
 
-    public void paymentPayU(PaymentRequest paymentRequest) {
 
-
-        String url = paymentData.getPaymentUrl();
-
-        Buyer buyer = new Buyer();
-        buyer.setEmail(paymentRequest.getBuyer().getEmail());
-        buyer.setPhone(paymentRequest.getBuyer().getPhone());
-        buyer.setFirstName(paymentRequest.getBuyer().getFirstName());
-        buyer.setLastName(paymentRequest.getBuyer().getLastName());
-        buyer.setLanguage(paymentRequest.getBuyer().getLanguage());
-
-        Product product = new Product();
-        product.setName(paymentRequest.getProducts().get(0).getName());
-        product.setUnitPrice(paymentRequest.getProducts().get(0).getUnitPrice());
-        product.setQuantity(paymentRequest.getProducts().get(0).getQuantity());
-        PaymentRequest orderRequest = new PaymentRequest();
-        orderRequest.setNotifyUrl(paymentRequest.getNotifyUrl());
-        orderRequest.setCustomerIp(paymentRequest.getCustomerIp());
-        orderRequest.setMerchantPosId(paymentRequest.getMerchantPosId());
-        orderRequest.setDescription(paymentRequest.getDescription());
-        orderRequest.setCurrencyCode(paymentRequest.getCurrencyCode());
-        orderRequest.setTotalAmount(paymentRequest.getTotalAmount());
-        orderRequest.setContinueUrl(paymentRequest.getContinueUrl());
-        orderRequest.setBuyer(paymentRequest.getBuyer());
-        orderRequest.setProducts(paymentRequest.getProducts());
-
-        String response = webClientBuilder.baseUrl(url)
-                .build()
-                .post()
-                .uri("")
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .bodyValue(orderRequest)
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-
-
-        String redirectUrl = parseRedirectFromResponse(response);
-        System.out.println("Klient powinien być przekierowany do: " + redirectUrl);
-    }
-
-    public Mono<JsonNode> paymentPayU2(PaymentRequest paymentRequest) {
+    public Mono<JsonNode> paymentPayU(PaymentRequest paymentRequest) {
         String url = paymentData.getPaymentUrl();
 
         PaymentRequest orderRequest = new PaymentRequest();
-        orderRequest.setNotifyUrl(paymentRequest.getNotifyUrl());
-        orderRequest.setCustomerIp(paymentRequest.getCustomerIp());
-        orderRequest.setMerchantPosId(paymentRequest.getMerchantPosId());
         orderRequest.setDescription(paymentRequest.getDescription());
         orderRequest.setCurrencyCode(paymentRequest.getCurrencyCode());
         orderRequest.setTotalAmount(paymentRequest.getTotalAmount());
-        orderRequest.setContinueUrl(paymentRequest.getContinueUrl());
         orderRequest.setBuyer(paymentRequest.getBuyer());
-        orderRequest.setProducts(paymentRequest.getProducts());
 
         return webClientBuilder.baseUrl(url)
                 .build()
@@ -130,13 +86,48 @@ public class PaymentService {
                 });
     }
 
-    public Mono<JsonNode> getOrderStatus() {
+    public Flux<JsonNode> getOrderStatus() {
+        List<Order> pendingOrders = orderRepository.findAllByStatus("NEW");
 
-        String orderId = getLatestOrderId();
-
-        if (orderId == null) {
-            return Mono.error(new RuntimeException("Brak orderId lub refundId do sprawdzenia statusu refundacji."));
+        if (pendingOrders.isEmpty()) {
+            return Flux.error(new RuntimeException("Brak zamówień ze statusem 'NEW'."));
         }
+
+        return Flux.fromIterable(pendingOrders)
+                .flatMap(order -> {
+                    String orderId = order.getOrderId();
+                    String url = UriComponentsBuilder
+                            .fromHttpUrl(paymentData.getPaymentUrl())
+                            .pathSegment(orderId)
+                            .toUriString();
+
+                    return webClientBuilder.build()
+                            .get()
+                            .uri(url)
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken.getToken())
+                            .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                            .retrieve()
+                            .bodyToMono(JsonNode.class)
+                            .map(response -> {
+                                JsonNode ordersNode = response.path("orders");
+                                if (ordersNode.isArray() && ordersNode.size() > 0) {
+                                    String newStatus = ordersNode.get(0).path("status").asText();
+                                    String currentStatus = order.getStatus();
+                                    if (!newStatus.equalsIgnoreCase(currentStatus)) {
+                                        order.setStatus(newStatus);
+                                        orderRepository.save(order);
+                                        System.out.println("Zamówienie " + orderId + " zaktualizowane na: " + newStatus);
+                                        System.out.println("Płatność udana!");
+                                    }
+                                }
+                                return response;
+                            });
+                });
+    }
+
+
+
+    public Mono<JsonNode> getOrderStatusById(String orderId) {
         String url = UriComponentsBuilder
                 .fromHttpUrl(paymentData.getPaymentUrl())
                 .pathSegment(orderId)
@@ -148,33 +139,11 @@ public class PaymentService {
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken.getToken())
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .retrieve()
-                .bodyToMono(JsonNode.class)
-                .map(response -> {
-                    JsonNode orders = response.path("orders");
-                    if (orders.isArray() && orders.size() > 0) {
-                        String newStatus = orders.get(0).path("status").asText();
+                .bodyToMono(JsonNode.class);
 
-                        orderRepository.findByOrderId(orderId).ifPresent(order -> {
-                            order.setStatus(newStatus);
-                            orderRepository.save(order);
-                            System.out.println("Status zamówienia " + orderId + " zaktualizowany na: " + newStatus);
-                        });
-                    }
 
-                    return response;
-                });
     }
 
-
-    public String parseRedirectFromResponse(String responseJson) {
-        try {
-            ObjectMapper mapper = new ObjectMapper();
-            JsonNode root = mapper.readTree(responseJson);
-            return root.path("redirectUri").asText();
-        } catch (Exception e) {
-            throw new RuntimeException("Nie udało się sparsować redirectUri z odpowiedzi PayU", e);
-        }
-    }
 
     public Mono<JsonNode> refundOrder(RefundRequest refundRequest) {
         String orderId = getLatestOrderId();
@@ -182,7 +151,7 @@ public class PaymentService {
             return Mono.error(new RuntimeException("Brak ważnego orderId do refundacji."));
         }
 
-        return getOrderStatus()
+        return getOrderStatusById(orderId)
                 .flatMap(statusJson -> {
                     JsonNode orderNode = statusJson.path("orders").get(0);
                     String statusid = orderNode.path("status").asText();
@@ -249,39 +218,42 @@ public class PaymentService {
 
 
 
-    public Mono<JsonNode> getRefundStatus() {
-        String orderId = getLatestOrderId();
-        String refundId = getLatestRefundId();
-        System.out.println("latestOrderId ustawione na: " + orderId);
-        System.out.println("latestRefundId ustawione na: " + refundId);
+    public Flux<JsonNode> getRefundStatus() {
+        List<Refund> pendingRefunds = refundRepository.findAllByStatus("PENDING");
 
-
-        if (orderId == null || refundId == null) {
-            return Mono.error(new RuntimeException("Brak orderId lub refundId do sprawdzenia statusu refundacji."));
+        if (pendingRefunds.isEmpty()) {
+            return Flux.error(new RuntimeException("Brak refundacji ze statusem 'PENDING'."));
         }
 
-        String url = "https://secure.snd.payu.com/api/v2_1/orders/" + orderId + "/refunds/" + refundId;
+        return Flux.fromIterable(pendingRefunds)
+                .flatMap(refund -> {
+                    String orderId = refund.getOrderId();
+                    String refundId = refund.getRefundId();
 
-        return webClientBuilder.build()
-                .get()
-                .uri(url)
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken.getToken())
-                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
-                .retrieve()
-                .bodyToMono(JsonNode.class)
-                .doOnError(e -> System.out.println("Błąd podczas pobierania statusu refundacji: " + e.getMessage()))
-                .map(response -> {
-                        String newStatus = response.path("status").asText();
-                        System.out.println(newStatus);
-                        refundRepository.findByRefundId(refundId).ifPresent(refund -> {
-                            refund.setStatus(newStatus);
-                            refundRepository.save(refund);
-                            System.out.println("Status zamówienia " + refundId + " zaktualizowany na: " + newStatus);
-                        });
+                    String url = "https://secure.snd.payu.com/api/v2_1/orders/" + orderId + "/refunds/" + refundId;
 
-                    return response;
+                    return webClientBuilder.build()
+                            .get()
+                            .uri(url)
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken.getToken())
+                            .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                            .retrieve()
+                            .bodyToMono(JsonNode.class)
+                            .doOnError(e -> System.out.println("Błąd przy pobieraniu statusu refundacji: " + refundId + " - " + e.getMessage()))
+                            .map(response -> {
+                                String newStatus = response.path("status").asText();
+                                String currentStatus = refund.getStatus();
+                                if (!newStatus.equalsIgnoreCase(currentStatus)) {
+                                    refund.setStatus(newStatus);
+                                    refundRepository.save(refund);
+                                    System.out.println("Status refundacji " + refundId + " zaktualizowany na: " + newStatus);
+                                    System.out.println("Zwrot wykonany!");
+                                }
+                                return response;
+                            });
                 });
     }
+
 
 
 

@@ -22,9 +22,9 @@ public class PaymentController {
 
     @PostMapping("/payment")
     public Mono<ResponseEntity<Map<String, Object>>> payment(@RequestBody PaymentRequest paymentRequest) {
-        return paymentService.paymentPayU2(paymentRequest)
+        return paymentService.paymentPayU(paymentRequest)
                 .map(response -> ResponseEntity.ok().body(
-                        Map.of("status", "success", "response", response)
+                        Map.of("status", "success", "response", response)       //url status
                 ))
                 .onErrorResume(e ->
                         Mono.just(ResponseEntity.badRequest().body(
@@ -33,35 +33,12 @@ public class PaymentController {
                 );
     }
 
-    @PostMapping("/payment2")
-    public ResponseEntity<?> payment2(@RequestBody PaymentRequest paymentRequest) {
-
-            return ResponseEntity.ok(
-                    Map.of("status", "success", "message", "")
-            );
-
-    }
-
-    @GetMapping("/order/status")
-    public Mono<ResponseEntity<Map<String, Object>>> getOrderStatus() {
-
-        return paymentService.getOrderStatus()
-                .map(response -> ResponseEntity.ok(
-                        Map.of("status", "success", "orderStatus", response)
-                ))
-                .onErrorResume(e -> Mono.just(
-                        ResponseEntity.status(500).body(
-                                Map.of("status", "error", "message", e.getMessage())
-                        )
-                ));
-    }
-
     @PostMapping("/refund")
     public Mono<ResponseEntity<Map<String, Object>>> refundOrder(@RequestBody RefundRequest refundRequest
     ) {
         return paymentService.refundOrder(refundRequest)
                 .map(response -> ResponseEntity.ok(
-                        Map.of("status", "success", "refundResponse", response)
+                        Map.of("status", "success", "refundResponse", response)     //status
                 ))
                 .onErrorResume(e -> Mono.just(
                         ResponseEntity.status(500).body(
@@ -70,19 +47,5 @@ public class PaymentController {
                 ));
     }
 
-
-    @GetMapping("/refund/status")
-    public Mono<ResponseEntity<Map<String, Object>>> getRefundStatus() {
-
-                return paymentService.getRefundStatus()
-                .map(response -> ResponseEntity.ok(
-                        Map.of("status", "success", "orderStatus", response)
-                ))
-                .onErrorResume(e -> Mono.just(
-                        ResponseEntity.status(500).body(
-                                Map.of("status", "error", "message", e.getMessage())
-                        )
-                ));
-    }
 
 }
