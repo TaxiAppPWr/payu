@@ -1,8 +1,8 @@
 package com.example.payu.services;
+
 import com.example.payu.configuration.PayuProperties;
 import com.example.payu.model.*;
 import com.example.payu.repository.OrderRepository;
-
 import com.example.payu.components.AccessToken;
 import com.example.payu.components.ClientConfig;
 import com.example.payu.components.PaymentData;
@@ -10,7 +10,9 @@ import com.example.payu.repository.RefundRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.JsonNodeFactory;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
@@ -20,6 +22,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 
 @Service
@@ -34,19 +37,28 @@ public class PaymentService {
     private final AtomicReference<String> latestRefundId = new AtomicReference<>();
     private final RefundRepository refundRepository;
     private final PayuProperties payuProperties;
+    private final RabbitTemplate rabbitTemplate;
+    private final JsonNodeFactory jsonNodeFactory = JsonNodeFactory.instance;
+
+    @Value("${rabbitmq.exchange}")
+    private String exchange;
+
+    @Value("${rabbitmq.routing-keys.payment-status}")
+    private String paymentStatusRoutingKey;
 
     @Autowired
-    public PaymentService(ClientConfig clientConfig, WebClient.Builder webClientBuilder, AccessToken accessToken, PaymentData paymentData, OrderRepository orderRepository, RefundRepository refundRepository, PayuProperties payuProperties) {
+    public PaymentService(ClientConfig clientConfig, WebClient.Builder webClientBuilder, AccessToken accessToken,
+                          PaymentData paymentData, OrderRepository orderRepository, RefundRepository refundRepository,
+                          PayuProperties payuProperties, RabbitTemplate rabbitTemplate) {
         this.clientConfig = clientConfig;
         this.webClientBuilder = webClientBuilder;
         this.accessToken = accessToken;
-        this.paymentData =  paymentData;
+        this.paymentData = paymentData;
         this.orderRepository = orderRepository;
         this.refundRepository = refundRepository;
         this.payuProperties = payuProperties;
+        this.rabbitTemplate = rabbitTemplate;
     }
-
-
 
     public Mono<JsonNode> paymentPayU(PaymentRequest paymentRequest) {
         String url = paymentData.getPaymentUrl();
@@ -83,17 +95,39 @@ public class PaymentService {
 
                     latestOrderId.set(orderId);
                     System.out.println("PayU orderId = " + orderId);
-
+                    sendPaymentStatusToRabbitMQ(orderId, status);
 
                     return response;
+                })
+                .onErrorResume(e -> {
+                    sendPaymentStatusToRabbitMQ(null, "ERROR", e.getMessage());
+                    return Mono.error(e);
                 });
     }
 
+    private void sendPaymentStatusToRabbitMQ(String orderId, String status) {
+        sendPaymentStatusToRabbitMQ(orderId, status, null);
+    }
+
+    private void sendPaymentStatusToRabbitMQ(String orderId, String status, String errorMessage) {
+        ObjectNode message = jsonNodeFactory.objectNode();
+        message.put("eventId", UUID.randomUUID().toString());
+        if (orderId != null) {
+            message.put("orderId", orderId);
+        }
+        message.put("status", status);
+        if (errorMessage != null) {
+            message.put("errorMessage", errorMessage);
+        }
+        rabbitTemplate.convertAndSend(exchange, paymentStatusRoutingKey, message.toString());
+        System.out.println("Wysłano do RabbitMQ: " + message.toString());
+    }
+
     public Flux<JsonNode> getOrderStatus() {
-        List<Order> ordersToCheck = orderRepository.findAllByStatusIn(List.of(Status.NEW,Status.SUCCESS,Status.PENDING));
+        List<Order> ordersToCheck = orderRepository.findAllByStatusIn(List.of(Status.NEW, Status.SUCCESS, Status.PENDING));
 
         if (ordersToCheck.isEmpty()) {
-            return Flux.error(new RuntimeException("Brak zamówień ze statusem 'NEW' lub 'SUCCESS'."));
+            return Flux.error(new RuntimeException("Brak zamówień ze statusem 'NEW', 'SUCCESS' lub 'PENDING'."));
         }
 
         return Flux.fromIterable(ordersToCheck)
@@ -126,6 +160,7 @@ public class PaymentService {
                                             if (parsedStatus == Status.COMPLETED) {
                                                 System.out.println("Płatność zakończona pomyślnie!");
                                             }
+                                            sendPaymentStatusToRabbitMQ(orderId, parsedStatus.name());
                                             return response;
                                         });
                                     }
@@ -134,9 +169,6 @@ public class PaymentService {
                             });
                 });
     }
-
-
-
 
     public Mono<JsonNode> getOrderStatusById(String orderId) {
         String url = UriComponentsBuilder
@@ -151,10 +183,7 @@ public class PaymentService {
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
                 .retrieve()
                 .bodyToMono(JsonNode.class);
-
-
     }
-
 
     public Mono<JsonNode> refundOrder(RefundRequest refundRequest) {
         String orderId = getLatestOrderId();
@@ -180,8 +209,8 @@ public class PaymentService {
 
                     String url = "https://secure.snd.payu.com/api/v2_1/orders/" + orderId + "/refunds";
 
-                    ObjectNode refundJson = JsonNodeFactory.instance.objectNode();
-                    ObjectNode refundDetails = JsonNodeFactory.instance.objectNode();
+                    ObjectNode refundJson = jsonNodeFactory.objectNode();
+                    ObjectNode refundDetails = jsonNodeFactory.objectNode();
                     refundDetails.put("description", payuProperties.getDescription());
                     refundDetails.put("amount", refundAmount);
                     refundJson.set("refund", refundDetails);
@@ -218,16 +247,16 @@ public class PaymentService {
                                 latestRefundId.set(refundId);
 
                                 System.out.println("Refund zapisany. refundId = " + refund.getDescription());
+                                sendPaymentStatusToRabbitMQ(orderId, refundStatus);
 
                                 return response;
                             })
-                            .doOnError(e -> System.out.println("Błąd podczas refundacji: " + e.getMessage()));
+                            .doOnError(e -> {
+                                sendPaymentStatusToRabbitMQ(orderId, "ERROR", e.getMessage());
+                                System.out.println("Błąd podczas refundacji: " + e.getMessage());
+                            });
                 });
     }
-
-
-
-
 
     public Flux<JsonNode> getRefundStatus() {
         List<Refund> pendingRefunds = refundRepository.findAllByStatus(Status.PENDING);
@@ -259,17 +288,14 @@ public class PaymentService {
                                     refundRepository.save(refund);
                                     System.out.println("Status refundacji " + refundId + " zaktualizowany na: " + newStatus);
                                     System.out.println("Zwrot wykonany!");
+                                    sendPaymentStatusToRabbitMQ(orderId, newStatus);
                                 }
                                 return response;
                             });
                 });
     }
 
-
-
-
     public String getLatestOrderId() {
         return latestOrderId.get();
     }
-
 }
