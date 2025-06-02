@@ -9,5 +9,5 @@ import lombok.Setter;
 @AllArgsConstructor
 public class PaymentResponse {
     private String status;
-    private Object response;
+    private Object response; //url orderid
 }
