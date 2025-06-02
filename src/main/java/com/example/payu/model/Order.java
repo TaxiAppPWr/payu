@@ -17,10 +17,8 @@ public class Order {
     private Long id;
 
     private String orderId;
-    private String description;
-    private String currencyCode;
     private Integer totalAmount;
     @Enumerated(EnumType.STRING)
-    private Status status;
+    private Status status = Status.NEW;
     private LocalDateTime createdAt = LocalDateTime.now();
 }

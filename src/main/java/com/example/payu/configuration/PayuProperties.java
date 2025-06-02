@@ -12,6 +12,7 @@ public class PayuProperties {
     private String customerIp;
     private String merchantPosId;
     private String continueUrl;
-    private String description;
-
+    private String refundDescription;
+    private String paymentDescription;
+    private String currencyCode;
 }

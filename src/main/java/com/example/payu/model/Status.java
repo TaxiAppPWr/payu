@@ -6,7 +6,7 @@ public enum Status {
     COMPLETED,
     WAITING_FOR_CONFIRMATION,
     PENDING,
-    CANCELLED,
+    CANCELED,
     FAILED,
     FINALIZED
 }

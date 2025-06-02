@@ -24,7 +24,5 @@ public class Refund {
     @Enumerated(EnumType.STRING)
     private Status status;
     private Integer amount;
-    private String description;
-    private String currencyCode;
     private LocalDateTime createdAt = LocalDateTime.now();
 }

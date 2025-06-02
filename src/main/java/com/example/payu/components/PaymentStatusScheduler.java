@@ -17,7 +17,7 @@ public class PaymentStatusScheduler {
     public void checkOrderStatus() {
         System.out.println("Sprawdzam status płatności...");
         paymentService.getOrderStatus()
-                .doOnNext(status -> System.out.println("Status płatności sprawdzony."))
+                .doOnNext(status -> System.out.println("Status płatności sprawdzony.\n" + status))
                 .doOnError(error -> System.out.println("Błąd przy sprawdzaniu statusu: " + error.getMessage()))
                 .subscribe();
     }

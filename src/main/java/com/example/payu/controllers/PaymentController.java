@@ -1,4 +1,5 @@
 package com.example.payu.controllers;
+import com.example.payu.dto.PaymentRequestTO;
 import com.example.payu.model.*;
 import com.example.payu.model.PaymentRequest;
 import com.example.payu.services.PaymentService;
@@ -7,7 +8,7 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 
 @RestController
-@RequestMapping("/payu")
+@RequestMapping("/api/payu")
 public class PaymentController {
 
     private final PaymentService paymentService;
@@ -17,7 +18,7 @@ public class PaymentController {
     }
 
     @PostMapping("/payment")
-    public Mono<ResponseEntity<PaymentResponse>> payment(@RequestBody PaymentRequest paymentRequest) {
+    public Mono<ResponseEntity<PaymentResponse>> payment(@RequestBody PaymentRequestTO paymentRequest) {
         return paymentService.paymentPayU(paymentRequest)
                 .map(response -> ResponseEntity.ok(new PaymentResponse("success", response)))
                 .onErrorResume(e ->
