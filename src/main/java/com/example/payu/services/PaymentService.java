@@ -35,6 +35,9 @@ import java.util.concurrent.atomic.AtomicReference;
 public class PaymentService {
     @Value("${rabbit.topic.payment.status-updated}")
     private String paymentStatusUpdatedTopic;
+    @Value("${payment-link.validity-time.minutes}")
+    private int expirationTimeMinutes;
+
 
     private final ClientConfig clientConfig;
     private final WebClient.Builder webClientBuilder;
@@ -74,6 +77,7 @@ public class PaymentService {
         orderRequest.setCustomerIp(payuProperties.getCustomerIp());
         orderRequest.setMerchantPosId(payuProperties.getMerchantPosId());
         orderRequest.setContinueUrl(payuProperties.getContinueUrl());
+        orderRequest.setValidityTime(String.valueOf(expirationTimeMinutes * 60));
 
         return webClientBuilder.baseUrl(url)
                 .build()
@@ -96,6 +100,7 @@ public class PaymentService {
 
                     latestOrderId.set(orderId);
                     System.out.println("PayU orderId = " + orderId);
+                    System.out.println(response);
 
 
                     return response;
@@ -135,7 +140,7 @@ public class PaymentService {
                                     Status parsedStatus = Status.valueOf(newStatus.toUpperCase());
 
                                     LocalDateTime orderExpiredTime = LocalDateTime.ofInstant(
-                                            Instant.now().minus(Duration.ofMinutes(5)),
+                                            Instant.now().minus(Duration.ofMinutes(expirationTimeMinutes)),
                                             ZoneId.systemDefault()
                                     );
 

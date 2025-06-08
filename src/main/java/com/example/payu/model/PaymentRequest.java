@@ -13,4 +13,5 @@ public class PaymentRequest {
     private String customerIp;
     private String merchantPosId;
     private String continueUrl;
+    private String validityTime;
 }
