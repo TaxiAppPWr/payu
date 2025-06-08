@@ -1,22 +1,23 @@
 package com.example.payu.components;
-import org.springframework.boot.context.properties.ConfigurationProperties;
+
+import lombok.Getter;
+import lombok.Setter;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+@Setter
+@Getter
 @Component
 public class ClientConfig {
-    private String id = "490009";
-    private String secret = "9a3f26c3823f06e7092ec96a8ffd98a5";
-    private String baseUrl = "https://secure.snd.payu.com/pl/standard/user/oauth/authorize";
+    private String id;
+    private String secret;
+    private String baseUrl;
 
-    public ClientConfig() {}
-
-    // Gettery i settery
-    public String getId() { return id; }
-    public void setId(String id) { this.id = id; }
-
-    public String getSecret() { return secret; }
-    public void setSecret(String secret) { this.secret = secret; }
-
-    public String getBaseUrl() { return baseUrl; }
-    public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+    public ClientConfig(@Value("${client.id}") String id,
+                        @Value("${client.secret}") String secret,
+                        @Value("${client.baseUrl}") String baseUrl) {
+        this.id = id;
+        this.secret = secret;
+        this.baseUrl = baseUrl;
+    }
 }
