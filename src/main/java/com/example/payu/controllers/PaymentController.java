@@ -34,4 +34,9 @@ public class PaymentController {
                         Mono.just(ResponseEntity.status(500).body(new RefundResponseWrapper("error", e.getMessage())))
                 );
     }
+
+    @GetMapping("/health")
+    public Mono<ResponseEntity<String>> healthCheck() {
+        return Mono.just(ResponseEntity.ok("Service is running"));
+    }
 }
